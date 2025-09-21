@@ -2,7 +2,8 @@
 import sys
 
 import psutil
-import ffmpeg
+
+from .build_ffmpeg_command import buildFFmpegCommand
 
 # ---- default settings ----
 input_file = str(sys.argv[1])
@@ -11,7 +12,8 @@ output_file = str(sys.argv[2])
 
 target_filesize = (10 * 1024 * 1024) # 10 MiB
 target_container = "matroska" # no reason to change this, this is required for webm
-target_fps = "8"
+target_fps = "6"
+target_resolution = "160x120"
 
 # ---- general settings ----
 threads = (min(8, psutil.cpu_count()))
@@ -21,7 +23,7 @@ profile = 2 # DO NOT CHANGE
 audio_codec = "libopus" # libopus or libvorbis; libvorbis not implemented yet
 
 if audio_codec == "libopus":
-    audio_bitrate = "6000" # bps (bits per second)
+    audio_bitrate = "6k" # bps (bits per second)
     audio_vbr = "constrained" # off, on, or constrained
     audio_compression_level = "10" # 0-10, no need to change for most cases unless you need speed
     audio_frame_duration = "60" # can be 2.5, 5, 10, 20, 40, 60; 20 or less is kinda pointless at these bitrates
@@ -31,26 +33,28 @@ if audio_codec == "libopus":
 elif audio_codec == "libvorbis":
     pass # TODO
 
+audio_samplerate = "12000"
+
 # ---- video settings ----
 video_encoder = "libvpx" # DO NOT CHANGE
 video_use_vp9 = True
-video_bitrate = ""
-video_keyframe_max_dist = str(target_fps * 10)
+video_bitrate = "9k"
+video_keyframe_max_dist = str(int(target_fps) * 10)
 video_keyframe_min_dist = ""
 video_qmin = ""
 video_qmax = ""
-video_bufsize = ""
+video_bufsize = "20k"
 video_rc_occupancy = ""
 video_undershoot_pct = ""
 video_overshoot_pct = ""
 video_skip_threshold = ""
 video_qcomp = ""
-video_maxrate = ""
-video_minrate = ""
+video_maxrate = "12k"
+video_minrate = "5k"
 video_crf = ""
 video_tune = "psnr" # psnr or ssim
 video_quality = "good" # best, good, or realtime; DO NOT CHANGE
-video_speed = "3"
+video_speed = "2"
 video_noise_sensitivity = ""
 video_static_thresh = ""
 video_slices = ""
@@ -76,14 +80,14 @@ video_temporal_id = ""
 
 if video_use_vp9:
     video_lossless = ""
-    video_tile_columns = "1"
+    video_tile_columns = "0"
     video_tile_rows = "0"
-    video_frame_parallel = ""
+    video_frame_parallel = "1"
     video_aq_mode = "0"
     video_colorspace = ""
     video_row_mt = "1" # boolean
-    video_tune_content = "0" # default (0), screen (1), film (2). 
-    video_corpus_complexity = "0" 
+    video_tune_content = "2" # default (0), screen (1), film (2).
+    video_corpus_complexity = "0"
     video_enable_tpl = "1" # boolean
     video_ref_frame_config = ""
     video_rfc_update_buffer_slot = ""
@@ -99,3 +103,35 @@ if video_use_vp9:
     video_rfc_reference_duration = ""
 else:
     video_screen_content_mode = "0" # 0 (off), 1 (screen), 2 (screen with more aggressive rate control).
+
+# First pass
+cmd1 = buildFFmpegCommand(
+    input_file, output_file, target_resolution, target_fps,
+    audio_codec, audio_bitrate, audio_samplerate,
+    audio_vbr, audio_application, audio_frame_duration,
+    video_use_vp9, video_bitrate, video_minrate, video_maxrate,
+    video_bufsize, video_speed, video_quality,
+    video_auto_alt_ref, video_lag_in_frames,
+    video_arnr_maxframes, video_arnr_strength,
+    video_tile_columns, video_frame_parallel,
+    video_tune_content, video_keyframe_max_dist,
+    pass_num=1
+)
+
+# Second pass
+cmd2 = buildFFmpegCommand(
+    input_file, output_file, target_resolution, target_fps,
+    audio_codec, audio_bitrate, audio_samplerate,
+    audio_vbr, audio_application, audio_frame_duration,
+    video_use_vp9, video_bitrate, video_minrate, video_maxrate,
+    video_bufsize, video_speed, video_quality,
+    video_auto_alt_ref, video_lag_in_frames,
+    video_arnr_maxframes, video_arnr_strength,
+    video_tile_columns, video_frame_parallel,
+    video_tune_content, video_keyframe_max_dist,
+    pass_num=2
+)
+
+# Run them
+cmd1.run()
+cmd2.run()
