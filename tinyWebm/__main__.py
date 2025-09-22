@@ -15,8 +15,8 @@ passlogfile = "ffmpeg2pass"
 target_filesize = (10 * 8 * 1024 * 1024) # 10 MiB
 target_container = "webm"
 target_fps = "6"
-target_resolution = "160x120"
-target_pix_format = "yuv420p"
+target_resolution = "128x72"
+target_pix_format = "yuv420p10le"
 
 # ---- general settings ----
 threads = (min(8, psutil.cpu_count()))
@@ -28,6 +28,7 @@ audio_samplerate = "8000"
 audio_vbr = "1"
 audio_application = "voip" # voip, audio, or lowdelay
 audio_cutoff = "4000"
+audio_frame_duration = "60"
 
 
 # ---- video settings ----
@@ -36,7 +37,7 @@ video_bitrate = "4k"
 video_gop = min(int(target_fps) * 10, 300)
 video_kf_min_dist = 12
 video_qmin = 30
-video_qmax = 58
+video_qmax = 53
 video_undershoot_pct = 80
 video_overshoot_pct = 100
 video_qcomp = 53
@@ -56,7 +57,7 @@ video_tile_columns = 1
 video_tile_rows = 0
 video_enable_tpl = 1
 
-video_profile = 0
+video_profile = 2
 video_lag_in_frames = 25
 
 
@@ -76,6 +77,7 @@ audio_args = {
     'vbr': audio_vbr,
     'application': audio_application,
     'cutoff': audio_cutoff,
+    'frame_duration': audio_frame_duration
 }
 
 # generic video encoding args
@@ -143,3 +145,5 @@ second_pass = (
 # run the passes
 first_pass.run(overwrite_output=True)
 second_pass.run(overwrite_output=True)
+
+pymkv.MKVFile(output_file)
