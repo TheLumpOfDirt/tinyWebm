@@ -24,24 +24,43 @@ threads = (min(8, psutil.cpu_count()))
 # ---- audio settings ----
 audio_codec = "libopus" # libopus or libvorbis; libvorbis not implemented yet
 audio_bitrate = "8k"
-audio_samplerate = "48000"
+audio_samplerate = "8000"
 audio_vbr = "1"
 audio_application = "voip" # voip, audio, or lowdelay
-audio_cutoff = "12000"
+audio_cutoff = "4000"
 
 
 # ---- video settings ----
 video_codec = "libvpx-vp9"
-video_bitrate = "6k"
-video_gop = int(target_fps) * 10
+video_bitrate = "4k"
+video_gop = min(int(target_fps) * 10, 300)
+video_kf_min_dist = 12
 video_qmin = 30
 video_qmax = 58
 video_undershoot_pct = 80
 video_overshoot_pct = 100
+video_qcomp = 53
+video_maxrate = ""
+video_minrate = ""
+video_crf = 1
+video_tune = "ssim" # psnr or ssim, ssim is better at low bitrates
+video_quality = "good" # best good or realtime; DO NOT CHANGE
+video_cpu_used = "3"
+video_auto_alt_ref = 1
+video_arnr_maxframes = 7
+video_arnr_strength = 4
+video_aq_mode = 2
+video_screen_tune = "default"
+video_row_mt = 1
+video_tile_columns = 1
+video_tile_rows = 0
+video_enable_tpl = 1
+
+video_profile = 0
 video_lag_in_frames = 25
 
 
-# ---- preparing ffmpeg args ----
+# ---- generic ffmpeg args ----
 
 target_args = {
     'threads': threads,
@@ -71,6 +90,18 @@ video_args = {
     'undershoot-pct': video_undershoot_pct,
     'overshoot-pct': video_overshoot_pct,
     'lag-in-frames': video_lag_in_frames,
+    'tune': video_tune,
+    'quality': video_quality,
+    'cpu-used': video_cpu_used,
+    'auto-alt-ref': video_auto_alt_ref,
+    'arnr-maxframes': video_arnr_maxframes,
+    'arnr-strength': video_arnr_strength,
+    'aq-mode': video_aq_mode,
+    'row-mt': video_row_mt,
+    'tile-columns': video_tile_columns,
+    'tile-rows': video_tile_rows,
+    'enable-tpl': video_enable_tpl,
+    'profile:v': video_profile,
 }
 
 # ---- actually create the ffmpeg commands ----
