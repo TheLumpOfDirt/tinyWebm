@@ -1,6 +1,7 @@
+# __main__.py
+import os
 import sys
 import time
-import os
 
 import ffmpeg
 import psutil
@@ -57,6 +58,7 @@ def iterativeEncode(input_file, output_file, duration, target_size_bytes,
             target_container,
             target_pix_fmt,
             threads,
+            cpu_used=(5 if test_only else config.VIDEO_CPU_USED),
             test_only=test_only,
             test_seconds=(config.SAMPLE_SECONDS if test_only else None)
         )
