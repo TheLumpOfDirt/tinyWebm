@@ -7,21 +7,8 @@ import tempfile
 
 import ffmpeg
 
-from .helpers import capDictToOriginal, adaptSettings, formatBPSToFfmpeg
+from .helpers import *
 from . import config
-
-def getSourceVideoParams(path):
-    """Return (bitrate_bps, width, height) for the first video stream, or (None,None,None)."""
-    try:
-        probe = ffmpeg.probe(path, select_streams="v:0")
-        stream = probe["streams"][0]
-        bitrate = int(stream.get("bit_rate", 0)) or None
-        width = int(stream.get("width", 0)) or None
-        height = int(stream.get("height", 0)) or None
-        return bitrate, width, height
-    except Exception as e:
-        print(f"[WARN] Could not probe source video params: {e}")
-        return None, None, None
 
 def encodeFile(input_file, outfile, v_bps, a_bps, duration,
                passlogfile,
@@ -42,11 +29,87 @@ def encodeFile(input_file, outfile, v_bps, a_bps, duration,
     if cpu_used is None:
         cpu_used = config.VIDEO_CPU_USED
 
-    # Get source params
-    src_bitrate, src_w, src_h = getSourceVideoParams(input_file)
+    # ---- get detailed source parameters ----
+    source_info = getSourceParams(input_file)
+
+    if not source_info:
+        raise ValueError("Failed to retrieve source parameters.")
+
+    # ---- unpack format-level metadata ----
+    src_format_name        = source_info.get('format_name')
+    src_format_long_name   = source_info.get('format_long_name')
+    src_duration           = source_info.get('duration_sec')
+    src_file_size_bytes    = source_info.get('size_bytes')
+    src_container_bitrate  = source_info.get('bitrate_bps')
+
+    if not src_duration or src_duration <= 0:
+        raise ValueError("Source duration is invalid.")
+    
+    if v_bps is None or a_bps is None:
+        # Use global target file size from config here
+        target_total_bps = (config.TARGET_FILESIZE_BYTES * 8.0) / src_duration
+        v_bps, a_bps = computeBitrates(target_total_bps)
+
+
+    # ---- unpack video stream metadata ----
+    src_video_info         = source_info.get('video', {})
+    src_video_bitrate  = src_video_info.get('bitrate_bps')
+    src_w              = src_video_info.get('width')
+    src_h              = src_video_info.get('height')
+    src_video_codec        = src_video_info.get('codec_name')
+    src_video_profile      = src_video_info.get('profile')
+    src_pix_fmt            = src_video_info.get('pix_fmt')
+    src_avg_frame_rate     = src_video_info.get('avg_frame_rate')
+    src_r_frame_rate       = src_video_info.get('r_frame_rate')
+    src_nb_frames          = src_video_info.get('nb_frames')
+    src_aspect_ratio       = src_video_info.get('aspect_ratio')
+    src_video_tags         = src_video_info.get('tags', {})
+
+    # ---- unpack audio stream metadata ----
+    src_audio_info         = source_info.get('audio', {})
+    src_audio_codec        = src_audio_info.get('codec_name')
+    src_audio_sample_rate  = src_audio_info.get('sample_rate')
+    src_audio_channels     = src_audio_info.get('channels')
+    src_audio_bitrate      = src_audio_info.get('bit_rate')
+    src_audio_duration     = src_audio_info.get('duration_sec')
+    src_audio_frames       = src_audio_info.get('nb_frames')
+    src_audio_tags         = src_audio_info.get('tags', {})
 
     # Suggested settings
-    audio_channels, audio_bitrate_str, fps_adapt, default_res, video_bitrate_str, audio_samplerate_str, audio_cutoff_str = adaptSettings(v_bps, a_bps)
+    audio_channels, audio_bitrate_str, fps_adapt, default_res, video_bitrate_str, audio_samplerate_str, audio_cutoff_str = adaptSettings(
+        v_bps, a_bps, src_res=f"{src_w}x{src_h}" if src_w and src_h else None, src_fps=src_avg_frame_rate
+        )
+
+    # ---- prepare values and source references for bitrate capping ----
+    values_to_cap = {
+        'v_bps': v_bps,
+        'a_bps': a_bps,
+        'fps': int(fps_adapt),
+        'res_w': int(default_res.split('x')[0]),
+        'res_h': int(default_res.split('x')[1]),
+        'audio_channels': int(audio_channels),
+        'audio_samplerate': int(audio_samplerate_str),
+    }
+
+    reference_values = {
+        'v_bps': src_video_bitrate,
+        'a_bps': src_audio_bitrate,
+        'fps': parse_framerate(src_avg_frame_rate) if src_avg_frame_rate else None,
+        'res_w': src_w,
+        'res_h': src_h,
+        'audio_channels': src_audio_channels,
+        'audio_samplerate': src_audio_sample_rate,
+    }
+
+    capped = capDictToOriginal(values_to_cap, reference_values)
+
+    # Assign back
+    v_bps = capped['v_bps']
+    a_bps = capped['a_bps']
+    fps_adapt = capped['fps']
+    forced_resolution = f"{int(capped['res_w'])}x{int(capped['res_h'])}"
+    audio_channels_local = str(capped['audio_channels'])
+    audio_samplerate_local = capped['audio_samplerate']
 
     # -----------------------------
     # Build value dicts for capping
@@ -64,11 +127,12 @@ def encodeFile(input_file, outfile, v_bps, a_bps, duration,
     }
 
     reference = {
-        'v_bps': src_bitrate,
+        'v_bps': src_video_bitrate,
+        'a_bps': src_audio_bitrate,
         'fps': getattr(config, 'MAX_FPS', None),
         'frame_duration': getattr(config, 'MAX_FRAME_DURATION', None),
-        'audio_samplerate': None,  # optional cap
-        'audio_cutoff': None,      # optional cap
+        'audio_samplerate': src_audio_sample_rate,
+        'audio_cutoff': (src_audio_sample_rate / 2),
         'res_w': src_w,
         'res_h': src_h,
         'audio_channels': 2,       # cap stereo
@@ -83,8 +147,13 @@ def encodeFile(input_file, outfile, v_bps, a_bps, duration,
     fps_adapt = capped['fps']
     frame_duration = capped['frame_duration']
     audio_samplerate_local = capped['audio_samplerate']
+    if config.AUDIO_CODEC == 'libopus':
+        adjusted_rate = round_nearest_opus_samplerate(audio_samplerate_local)
+        if adjusted_rate != audio_samplerate_local:
+            print(f"[WARN] libopus does not support {audio_samplerate_local} Hz. Using nearest valid rate: {adjusted_rate} Hz.")
+        audio_samplerate_local = adjusted_rate
     audio_cutoff_local = capped['audio_cutoff']
-    forced_resolution = f"{capped['res_w']}x{capped['res_h']}"
+    forced_resolution = f"{int(capped['res_w'])}x{int(capped['res_h'])}"
     audio_channels_local = str(capped['audio_channels'])
 
     v_bitrate_str = formatBPSToFfmpeg(v_bps)

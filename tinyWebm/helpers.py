@@ -1,64 +1,142 @@
 # helpers.py
 import math
 
+import ffmpeg
+
 def capToOriginal(value, original):
     """
     Cap value to not exceed original reference.
     Works with int, float, or comparable types.
     If original is None, return value unmodified.
     """
-    if original is None:
+    if original is None or value is None:
         return value
-    return min(value, original)
+
+    # Convert strings like "30/1" (fps) to float if possible
+    if isinstance(value, str) and '/' in value:
+        try:
+            num, den = value.split('/')
+            value = float(num) / float(den)
+        except Exception:
+            pass
+
+    if isinstance(original, str) and '/' in original:
+        try:
+            num, den = original.split('/')
+            original = float(num) / float(den)
+        except Exception:
+            pass
+
+    try:
+        return min(float(value), float(original))
+    except Exception:
+        # fallback: if can't convert to float, just compare as is
+        return min(value, original)
+
 
 def capDictToOriginal(values: dict, reference: dict) -> dict:
     """
-    Cap each value in `values` to the corresponding value in `reference`,
-    but never shrink values that are already lower than the reference.
-    If a reference value is None, it is ignored (no cap applied).
+    Cap each value in `values` to the corresponding value in `reference`.
+    If reference value is None or missing, no capping for that key.
+    Handles conversion of strings representing fractions.
     """
     capped = {}
     for k, v in values.items():
         ref = reference.get(k)
         if ref is not None and v is not None:
-            # Only cap if value exceeds reference
-            capped[k] = min(v, ref)
+            capped[k] = capToOriginal(v, ref)
         else:
-            # No reference or value, keep original
             capped[k] = v
     return capped
 
-import math
+def getSourceParams(path):
+    """
+    Return detailed information about the first video and audio streams, and format-level metadata.
+    Returns a dictionary with all available parameters, or None if probing fails.
+    """
+    try:
+        probe = ffmpeg.probe(path)
+        format_info = probe.get('format', {})
+        streams = probe.get('streams', [])
 
-def computeBitrates(total_bps, audio_min_bitrate=6_000, audio_max_bitrate=256_000, max_video_audio_ratio=10.0):
+        # Video stream (first one)
+        video_stream = next((s for s in streams if s['codec_type'] == 'video'), None)
+        audio_stream = next((s for s in streams if s['codec_type'] == 'audio'), None)
+
+        info = {
+            'format_name': format_info.get('format_name'),
+            'format_long_name': format_info.get('format_long_name'),
+            'duration_sec': float(format_info.get('duration', 0)),
+            'size_bytes': int(format_info.get('size', 0)),
+            'bitrate_bps': int(format_info.get('bit_rate', 0)),
+
+            'video': {},
+            'audio': {}
+        }
+
+        if video_stream:
+            info['video'] = {
+                'codec_name': video_stream.get('codec_name'),
+                'codec_long_name': video_stream.get('codec_long_name'),
+                'profile': video_stream.get('profile'),
+                'bitrate_bps': int(video_stream.get('bit_rate', 0)) or None,
+                'width': int(video_stream.get('width', 0)) or None,
+                'height': int(video_stream.get('height', 0)) or None,
+                'pix_fmt': video_stream.get('pix_fmt'),
+                'avg_frame_rate': video_stream.get('avg_frame_rate'),
+                'r_frame_rate': video_stream.get('r_frame_rate'),
+                'duration_ts': video_stream.get('duration_ts'),
+                'duration_sec': float(video_stream.get('duration', 0)) if video_stream.get('duration') else None,
+                'nb_frames': int(video_stream.get('nb_frames', 0)) if video_stream.get('nb_frames') else None,
+                'aspect_ratio': video_stream.get('display_aspect_ratio'),
+                'tags': video_stream.get('tags', {})
+            }
+
+        if audio_stream:
+            info['audio'] = {
+                'codec_name': audio_stream.get('codec_name'),
+                'codec_long_name': audio_stream.get('codec_long_name'),
+                'sample_rate': int(audio_stream.get('sample_rate', 0)) if audio_stream.get('sample_rate') else None,
+                'channels': int(audio_stream.get('channels', 0)) if audio_stream.get('channels') else None,
+                'bitrate_bps': int(audio_stream.get('bit_rate', 0)) if audio_stream.get('bit_rate') else None,
+                'duration_sec': float(audio_stream.get('duration', 0)) if audio_stream.get('duration') else None,
+                'nb_frames': int(audio_stream.get('nb_frames', 0)) if audio_stream.get('nb_frames') else None,
+                'tags': audio_stream.get('tags', {})
+            }
+
+        return info
+
+    except Exception as e:
+        print(f"[WARN] Could not probe source video params: {e}")
+        return None
+
+def computeBitrates(
+    total_bps,
+    audio_min_bitrate=6_000,
+    audio_max_bitrate=256_000,
+):
     """
-    Split total_bps into (video_bps, audio_bps) using a smooth logarithmic curve.
-    - Low bitrate: audio dominates
-    - High bitrate: video dominates up to max_video_audio_ratio
+    Allocate total_bps between audio and video using a sigmoid curve for audio.
+    
+    - Audio gets between audio_min_bitrate and audio_max_bitrate.
+    - Audio ramps up early and levels off.
+    - Video gets whatever remains (no minimum).
     """
+
     total_bps = max(1, int(total_bps))
 
-    # Calculate a smooth fraction for audio based on total_bps
-    # log scale: log(total_bps + 1) / log(max_total + 1)
-    # Adjust max_total for normalization (~5 Mbps)
-    max_total = 5_000_000
-    fraction = max(0.2, min(0.8, 0.66 - 0.46 * math.log10(total_bps + 1) / math.log10(max_total + 1)))
+    # ---- AUDIO CURVE ----
+    # Smooth sigmoid: centered around 500 kbps, spreads over ~400 kbps
+    audio_scale = sigmoid((total_bps - 500_000) / 200_000)
+    audio_bitrate = int(audio_min_bitrate + (audio_max_bitrate - audio_min_bitrate) * audio_scale)
 
-    audio_target = int(total_bps * fraction)
-    audio_bitrate = max(audio_min_bitrate, min(audio_target, audio_max_bitrate))
-    audio_bitrate = min(audio_bitrate, total_bps - 1)  # ensure video >= 1
+    # Clamp to total budget
+    audio_bitrate = min(audio_bitrate, total_bps - 1)
 
+    # ---- VIDEO ----
     video_bitrate = total_bps - audio_bitrate
 
-    # enforce max ratio
-    if video_bitrate > audio_bitrate * max_video_audio_ratio:
-        video_bitrate = int(audio_bitrate * max_video_audio_ratio)
-        audio_bitrate = total_bps - video_bitrate
-        audio_bitrate = max(audio_min_bitrate, min(audio_bitrate, audio_max_bitrate))
-
     return int(video_bitrate), int(audio_bitrate)
-
-
 
 
 def computeAudioEncodingParams(audio_bitrate_bps):
@@ -84,7 +162,6 @@ def computeAudioEncodingParams(audio_bitrate_bps):
 
     cutoff = min(int(sr / 2 * 0.95), 20000)  # keep a bit below Nyquist
     return int(sr), int(cutoff)
-
 
 def adaptSettings(video_bitrate_bps, audio_bitrate_bps, src_res=None, src_fps=None):
     """
@@ -139,7 +216,7 @@ def adaptSettings(video_bitrate_bps, audio_bitrate_bps, src_res=None, src_fps=No
             # shrink only if target < source
             final_w = min(tr_w, src_w)
             final_h = min(tr_h, src_h)
-            final_res = f"{final_w}x{final_h}"
+            final_res = f"{int(final_w)}x{int(final_h)}"
         except Exception:
             final_res = target_res
     else:
@@ -158,7 +235,23 @@ def adaptSettings(video_bitrate_bps, audio_bitrate_bps, src_res=None, src_fps=No
 
     return audio_channels, audio_bitrate_str, final_fps, final_res, video_bitrate_str, audio_samplerate_str, audio_cutoff_str
 
-
 def formatBPSToFfmpeg(v_bps):
     """Format integer bits-per-second to ffmpeg 'k' string (rounded kbps)."""
     return f"{int(round(v_bps/1000.0))}k"
+
+def parse_framerate(fps_str):
+    try:
+        if '/' in fps_str:
+            num, denom = fps_str.split('/')
+            return float(num) / float(denom)
+        else:
+            return float(fps_str)
+    except Exception:
+        return None
+   
+def round_nearest_opus_samplerate(rate):
+    valid_rates = [8000, 12000, 16000, 24000, 48000]
+    return min(valid_rates, key=lambda x: abs(x - rate))
+
+def sigmoid(x):
+    return 1 / (1 + math.exp(-x))
