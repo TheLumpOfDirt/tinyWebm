@@ -66,7 +66,8 @@ def iterativeEncode(input_file, output_file, duration, target_size_bytes,
 
         error_ratio = size_bytes / target_size_bytes
         if abs(1 - error_ratio) < 0.02:  # within 2% of target
-            break
+            if size_bytes < target_size_bytes:
+                break
 
         # smooth correction to avoid oscillation
         alpha = 0.5
