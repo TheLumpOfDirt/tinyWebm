@@ -49,4 +49,4 @@ VIDEO_LAG_IN_FRAMES = 25
 
 
 # default sample seconds used for quick test encode
-SAMPLE_SECONDS = 5
+SAMPLE_SECONDS = 60
