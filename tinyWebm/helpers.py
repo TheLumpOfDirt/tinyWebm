@@ -112,21 +112,21 @@ def getSourceParams(path):
 
 def computeBitrates(
     total_bps,
+    duration_sec=None,
     audio_min_bitrate=6_000,
     audio_max_bitrate=256_000,
 ):
     """
     Allocate total_bps between audio and video using a sigmoid curve for audio.
-    
-    - Audio gets between audio_min_bitrate and audio_max_bitrate.
-    - Audio ramps up early and levels off.
-    - Video gets whatever remains (no minimum).
-    """
 
+    - Audio gets between audio_min_bitrate and audio_max_bitrate.
+    - Video gets the rest.
+    - At very low total_bps, ensure video always gets a minimum share.
+    - Minimum video share scales with duration (longer = more video priority).
+    """
     total_bps = max(1, int(total_bps))
 
     # ---- AUDIO CURVE ----
-    # Smooth sigmoid: centered around 500 kbps, spreads over ~400 kbps
     audio_scale = sigmoid((total_bps - 500_000) / 200_000)
     audio_bitrate = int(audio_min_bitrate + (audio_max_bitrate - audio_min_bitrate) * audio_scale)
 
@@ -136,8 +136,21 @@ def computeBitrates(
     # ---- VIDEO ----
     video_bitrate = total_bps - audio_bitrate
 
-    return int(video_bitrate), int(audio_bitrate)
+    # Base floor: 20% of budget or 5k
+    min_video = max(5_000, int(total_bps * 0.2))
 
+    # Duration scaling: boost min floor for long videos
+    if duration_sec:
+        if duration_sec > 3_600:   # > 1 hr
+            min_video = max(min_video, int(total_bps * 0.3))
+        if duration_sec > 7_200:   # > 2 hr
+            min_video = max(min_video, int(total_bps * 0.4))
+
+    if video_bitrate < min_video:
+        video_bitrate = min_video
+        audio_bitrate = max(total_bps - video_bitrate, audio_min_bitrate)
+
+    return int(video_bitrate), int(audio_bitrate)
 
 def computeAudioEncodingParams(audio_bitrate_bps):
     """

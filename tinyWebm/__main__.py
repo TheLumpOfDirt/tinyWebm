@@ -65,7 +65,10 @@ def iterativeEncode(input_file, output_file, duration, target_size_bytes,
 
 
         # Smooth correction to avoid oscillation
-        alpha = 0.5
+        if size_bytes > target_size_bytes:
+            alpha = 0.75
+        else:
+            alpha = 0.5
         correction = alpha * ((1 / error_ratio) - 1)
 
         # Optional: clamp correction to avoid wild swings
@@ -77,7 +80,7 @@ def iterativeEncode(input_file, output_file, duration, target_size_bytes,
         corrected_total_bps = total_bps * (1 + correction)
 
         # Recalculate bitrates
-        video_bitrate_bps, audio_bitrate_bps = computeBitrates(corrected_total_bps)
+        video_bitrate_bps, audio_bitrate_bps = computeBitrates(corrected_total_bps, src_duration)
 
         # ---- cap again ----
         capped = capDictToOriginal({'v_bps': video_bitrate_bps, 'a_bps': audio_bitrate_bps},
@@ -152,7 +155,7 @@ if src_audio_bitrate is None and src_container_bitrate is not None and src_video
 
 # ---- compute target bitrates ----
 target_total_bps = (target_filesize_bytes * 8.0) / src_duration
-video_bitrate_bps, audio_bitrate_bps = computeBitrates(target_total_bps)
+video_bitrate_bps, audio_bitrate_bps = computeBitrates(target_total_bps, src_duration)
 
 # ---- prepare values and source references for bitrate capping ----
 values = {
